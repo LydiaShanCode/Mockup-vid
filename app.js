@@ -22,11 +22,17 @@
     exporting: false,
     screenMsg: null,
     gapFill: 'edges',
+    heightPct: 1,
+    safari: false,
+    barStyle: 'auto',
+    uiTime: '9:41',
+    uiUrl: 'example.com',
+    uiNetwork: '5G',
+    uiBattery: 100,
     gapColor: '#ffffff',
   };
 
   // iPhone-style proportions (screen in points: 393 × 852)
-  const SCREEN_RATIO = 393 / 852;
 
   const FRAMES = {
     natural: { edge: ['#8d8a83', '#d8d5ce', '#a9a69f', '#e4e1da', '#85827b'], button: '#a3a09a' },
@@ -88,35 +94,40 @@
     }
   }
 
+  // Geometry is width-based so the phone can be made shorter without the
+  // corners, island and buttons changing size. Units: iPhone points (393 wide).
+  const STD_ASPECT = 852 / 393;           // standard screen height / width
+  const METAL = 0.0175, BEZEL = 0.0278;   // fractions of body width
+  const STATUS_H = 54, TOOLBAR_H = 86;    // Safari UI heights in points
+
   function phoneGeometry(W, H) {
-    // Body height is a fraction of the canvas height, limited by width too.
-    const metal = 0.0085, bezel = 0.0135; // fractions of body height
-    let bodyH = H * state.size;
-    const bodyWFor = (bh) => bh * (1 - 2 * (metal + bezel)) * SCREEN_RATIO + 2 * bh * (metal + bezel);
-    const maxW = W * 0.9;
-    if (bodyWFor(bodyH) > maxW) bodyH *= maxW / bodyWFor(bodyH);
-    const bodyW = bodyWFor(bodyH);
+    const stdBodyRatio = (1 - 2 * (METAL + BEZEL)) * STD_ASPECT + 2 * (METAL + BEZEL);
+    // "Size" is the height of a standard-height phone; shortening keeps the width.
+    let bodyW = Math.min((H * state.size) / stdBodyRatio, W * 0.9);
+    const m = bodyW * METAL, b = bodyW * BEZEL;
+    const sw = bodyW - 2 * (m + b);
+    const sh = sw * STD_ASPECT * state.heightPct;
+    const bodyH = sh + 2 * (m + b);
     const x = (W - bodyW) / 2, y = (H - bodyH) / 2;
-    const m = bodyH * metal, b = bodyH * bezel;
-    const screen = { x: x + m + b, y: y + m + b, w: bodyW - 2 * (m + b), h: bodyH - 2 * (m + b) };
-    screen.r = screen.h * 0.0645;
+    const screen = { x: x + m + b, y: y + m + b, w: sw, h: sh, r: sw * (55 / 393) };
     return { x, y, w: bodyW, h: bodyH, m, b, screen, r: screen.r + m + b };
   }
 
   function drawButtons(g) {
     const f = FRAMES[state.frame];
-    const t = g.h * 0.0055;           // how far the buttons stick out
+    const t = g.w * 0.0113;           // how far the buttons stick out
     const bw = t * 1.6;
     ctx.fillStyle = f.button;
     const btn = (side, top, len) => {
+      if (g.w * (top + len) > g.h - g.r * 0.6) return; // skip if the phone is too short
       const bx = side === 'left' ? g.x - t : g.x + g.w - bw + t;
-      rr(bx, g.y + g.h * top, bw, g.h * len, bw / 2);
+      rr(bx, g.y + g.w * top, bw, g.w * len, bw / 2);
       ctx.fill();
     };
-    btn('left', 0.165, 0.045);  // action button
-    btn('left', 0.245, 0.085);  // volume up
-    btn('left', 0.35, 0.085);   // volume down
-    btn('right', 0.27, 0.13);   // side button
+    btn('left', 0.34, 0.093);   // action button
+    btn('left', 0.505, 0.175);  // volume up
+    btn('left', 0.722, 0.175);  // volume down
+    btn('right', 0.557, 0.268); // side button
   }
 
   // Small offscreen canvas used to sample edge colours and to make a cheap blur
@@ -150,29 +161,50 @@
   }
   const rgb = (c) => `rgb(${c.map(Math.round).join(',')})`;
 
-  function drawGaps(src, sw, sh, s) {
-    const k = Math.min(s.w / sw, s.h / sh);
+  // Where the recording sits on the screen: below the status bar and above the
+  // Safari toolbar when the Safari UI is on, otherwise the whole screen.
+  function contentRect(s) {
+    if (!state.safari) return s;
+    const u = s.w / 393;
+    return { x: s.x, y: s.y + STATUS_H * u, w: s.w, h: s.h - (STATUS_H + TOOLBAR_H) * u };
+  }
+
+  function placed(sw, sh, c, mode) {
+    const k = mode === 'contain' ? Math.min(c.w / sw, c.h / sh) : Math.max(c.w / sw, c.h / sh);
     const dw = sw * k, dh = sh * k;
-    const dx = s.x + (s.w - dw) / 2, dy = s.y + (s.h - dh) / 2;
-    if (state.gapFill === 'black') { ctx.fillStyle = '#000'; ctx.fillRect(s.x, s.y, s.w, s.h); }
-    else if (state.gapFill === 'color') { ctx.fillStyle = state.gapColor; ctx.fillRect(s.x, s.y, s.w, s.h); }
-    else if (state.gapFill === 'blur') {
+    const dx = c.x + (c.w - dw) / 2, dy = c.y + (c.h - dh) / 2;
+    // visible part, clipped to the content rect
+    return { x0: Math.max(dx, c.x), y0: Math.max(dy, c.y),
+             x1: Math.min(dx + dw, c.x + c.w), y1: Math.min(dy + dh, c.y + c.h) };
+  }
+
+  const hexToRgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+
+  // Colour actually behind the top / bottom of the screen (drives the bar style)
+  function fillColor(side) {
+    if (state.gapFill === 'black') return [0, 0, 0];
+    if (state.gapFill === 'color') return hexToRgb(state.gapColor);
+    return edgeColors[side] || [240, 240, 236];
+  }
+
+  function drawGaps(src, sw, sh, s, c) {
+    const v = placed(sw, sh, c, state.fit);
+    if (state.gapFill === 'black') { ctx.fillStyle = '#000'; ctx.fillRect(s.x, s.y, s.w, s.h); return; }
+    if (state.gapFill === 'color') { ctx.fillStyle = state.gapColor; ctx.fillRect(s.x, s.y, s.w, s.h); return; }
+    const e = sampleEdges(src, sw, sh);
+    if (state.gapFill === 'blur') {
       sampler.width = 12; sampler.height = Math.max(2, Math.round(12 * sh / sw));
       sctx.drawImage(src, 0, 0, sampler.width, sampler.height);
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = 'high';
       drawFitted(sampler, sampler.width, sampler.height, s.x, s.y, s.w, s.h, 'cover');
-    } else {
-      const c = sampleEdges(src, sw, sh);
-      if (!c) { ctx.fillStyle = '#000'; ctx.fillRect(s.x, s.y, s.w, s.h); }
-      else if (dh < s.h - 0.5) {
-        ctx.fillStyle = rgb(c.top);    ctx.fillRect(s.x, s.y, s.w, dy - s.y + 1);
-        ctx.fillStyle = rgb(c.bottom); ctx.fillRect(s.x, dy + dh - 1, s.w, s.y + s.h - (dy + dh) + 1);
-      } else if (dw < s.w - 0.5) {
-        ctx.fillStyle = rgb(c.left);  ctx.fillRect(s.x, s.y, dx - s.x + 1, s.h);
-        ctx.fillStyle = rgb(c.right); ctx.fillRect(dx + dw - 1, s.y, s.x + s.w - (dx + dw) + 1, s.h);
-      }
+      return;
     }
+    if (!e) { ctx.fillStyle = '#000'; ctx.fillRect(s.x, s.y, s.w, s.h); return; }
+    if (v.y0 > s.y + 0.5) { ctx.fillStyle = rgb(e.top); ctx.fillRect(s.x, s.y, s.w, v.y0 - s.y + 1); }
+    if (v.y1 < s.y + s.h - 0.5) { ctx.fillStyle = rgb(e.bottom); ctx.fillRect(s.x, v.y1 - 1, s.w, s.y + s.h - v.y1 + 1); }
+    if (v.x0 > s.x + 0.5) { ctx.fillStyle = rgb(e.left); ctx.fillRect(s.x, v.y0, v.x0 - s.x + 1, v.y1 - v.y0); }
+    if (v.x1 < s.x + s.w - 0.5) { ctx.fillStyle = rgb(e.right); ctx.fillRect(v.x1 - 1, v.y0, s.x + s.w - v.x1 + 1, v.y1 - v.y0); }
   }
 
   function drawScreenContent(s) {
@@ -187,9 +219,15 @@
     } else if (state.source === 'image' && state.screenImage) {
       src = state.screenImage; sw = src.naturalWidth; sh = src.naturalHeight;
     }
+    const c = contentRect(s);
     if (src) {
-      if (state.fit === 'contain') drawGaps(src, sw, sh, s);
-      drawFitted(src, sw, sh, s.x, s.y, s.w, s.h, state.fit);
+      if (state.fit === 'contain' || state.safari) drawGaps(src, sw, sh, s, c);
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(c.x, c.y, c.w, c.h);
+      ctx.clip();
+      drawFitted(src, sw, sh, c.x, c.y, c.w, c.h, state.fit);
+      ctx.restore();
     } else if (state.source === 'video' && video.videoWidth) {
       // video selected but no frame decoded yet: keep the black screen
     } else {
@@ -204,6 +242,127 @@
       ctx.font = `500 ${s.w * 0.055}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
       ctx.fillText(state.screenMsg || 'Drop a screen recording', s.x + s.w / 2, s.y + s.h / 2);
     }
+    if (state.safari) drawSafariUI(s, src ? null : [240, 240, 236]);
+    ctx.restore();
+  }
+
+  // ---------- Safari / iOS chrome ----------
+  const UI_FONT = '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "Segoe UI", sans-serif';
+  const lum = (c) => (0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]) / 255;
+  function isDark(side, fallback) {
+    if (state.barStyle === 'light') return false;
+    if (state.barStyle === 'dark') return true;
+    return lum(fallback || fillColor(side)) < 0.5;
+  }
+
+  function drawSafariUI(s, fallback) {
+    const u = s.w / 393;
+    const X = (p) => s.x + p * u, Y = (p) => s.y + p * u, YB = (p) => s.y + s.h - p * u;
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    // --- status bar ---
+    const fg = isDark('top', fallback) ? '#fff' : '#000';
+    const cy = Y(30);
+    ctx.fillStyle = fg;
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'center';
+    ctx.font = `600 ${17 * u}px ${UI_FONT}`;
+    ctx.fillText(state.uiTime, X(64), cy + 0.5 * u);
+
+    // right cluster, laid out right-to-left from x = 360
+    let rx = 360;
+    // battery
+    const bw = 25, bh = 12;
+    const bx = rx - bw - 2;
+    ctx.globalAlpha = 0.4;
+    ctx.strokeStyle = fg;
+    ctx.lineWidth = 1 * u;
+    rr(X(bx), cy - (bh / 2) * u, bw * u, bh * u, 3.8 * u); ctx.stroke();
+    rr(X(bx + bw + 0.8), cy - 2 * u, 1.6 * u, 4 * u, 0.8 * u); ctx.fill();
+    ctx.globalAlpha = 1;
+    const lvl = Math.max(0.06, state.uiBattery / 100);
+    rr(X(bx + 2), cy - (bh / 2 - 2) * u, (bw - 4) * lvl * u, (bh - 4) * u, 2.2 * u); ctx.fill();
+    rx = bx - 6;
+    // network
+    if (state.uiNetwork === 'wifi') {
+      const wx = X(rx - 8.5), wy = cy + 5 * u;
+      ctx.beginPath(); ctx.moveTo(wx, wy); ctx.arc(wx, wy, 3.2 * u, -Math.PI * 0.75, -Math.PI * 0.25); ctx.closePath(); ctx.fill();
+      ctx.lineWidth = 2 * u;
+      for (const r of [7, 11]) { ctx.beginPath(); ctx.arc(wx, wy, r * u, -Math.PI * 0.75, -Math.PI * 0.25); ctx.stroke(); }
+      rx -= 17 + 6;
+    } else {
+      ctx.textAlign = 'right';
+      ctx.font = `600 ${14 * u}px ${UI_FONT}`;
+      ctx.fillText(state.uiNetwork, X(rx), cy + 0.5 * u);
+      rx -= ctx.measureText(state.uiNetwork).width / u + 6;
+    }
+    // signal bars
+    [4.5, 6.8, 9.2, 11.5].forEach((h, i) => {
+      rr(X(rx - 17 + i * 4.6), cy + (5.75 - h) * u, 3 * u, h * u, 0.9 * u);
+      ctx.fill();
+    });
+
+    // --- Safari toolbar ---
+    const dark = isDark('bottom', fallback);
+    const ink = dark ? '#fff' : '#1d1d1f';
+    const dim = dark ? 'rgba(255,255,255,0.4)' : 'rgba(60,60,67,0.3)';
+    const by = YB(57);
+    const glass = (x, w) => {
+      ctx.save();
+      ctx.shadowColor = 'rgba(0,0,0,0.14)';
+      ctx.shadowBlur = 14 * u;
+      ctx.shadowOffsetY = 3 * u;
+      ctx.fillStyle = dark ? 'rgba(44,44,46,0.86)' : 'rgba(252,252,252,0.86)';
+      rr(X(x), by - 23 * u, w * u, 46 * u, 23 * u); ctx.fill();
+      ctx.restore();
+      ctx.strokeStyle = dark ? 'rgba(255,255,255,0.14)' : 'rgba(255,255,255,0.95)';
+      ctx.lineWidth = 0.8 * u;
+      rr(X(x) + 0.4 * u, by - 22.6 * u, (w - 0.8) * u, 45.2 * u, 22.6 * u); ctx.stroke();
+      ctx.strokeStyle = dark ? 'rgba(0,0,0,0.3)' : 'rgba(0,0,0,0.06)';
+      rr(X(x), by - 23 * u, w * u, 46 * u, 23 * u); ctx.stroke();
+    };
+    glass(33, 46);       // back
+    glass(88, 217);      // address
+    glass(314, 46);      // more
+
+    ctx.lineWidth = 2.4 * u;
+    // back chevron (disabled look)
+    ctx.strokeStyle = dim;
+    ctx.beginPath();
+    ctx.moveTo(X(60), by - 9 * u); ctx.lineTo(X(51.5), by); ctx.lineTo(X(60), by + 9 * u);
+    ctx.stroke();
+    // more (•••)
+    ctx.fillStyle = ink;
+    for (const dx of [-7.5, 0, 7.5]) { ctx.beginPath(); ctx.arc(X(337 + dx), by, 2.1 * u, 0, Math.PI * 2); ctx.fill(); }
+
+    // page menu icon (left of the URL)
+    ctx.strokeStyle = ink;
+    ctx.lineWidth = 1.8 * u;
+    [[-5, 14], [0, 14], [5, 9]].forEach(([dy, len]) => {
+      ctx.beginPath(); ctx.moveTo(X(104), by + dy * u); ctx.lineTo(X(104 + len), by + dy * u); ctx.stroke();
+    });
+    // reload icon
+    const rcx = X(284), rr_ = 6.8 * u;
+    ctx.beginPath(); ctx.arc(rcx, by, rr_, -Math.PI * 0.35, Math.PI * 1.45); ctx.stroke();
+    const ax = rcx + rr_ * Math.cos(-Math.PI * 0.35), ay = by + rr_ * Math.sin(-Math.PI * 0.35);
+    ctx.beginPath();
+    ctx.moveTo(ax - 4.5 * u, ay - 2.2 * u); ctx.lineTo(ax + 0.3 * u, ay + 0.2 * u); ctx.lineTo(ax - 0.6 * u, ay + 4.8 * u);
+    ctx.stroke();
+
+    // URL text, shrunk / truncated to fit
+    const maxW = 150 * u;
+    let size = 16.5, text = state.uiUrl || '';
+    ctx.font = `400 ${size * u}px ${UI_FONT}`;
+    while (ctx.measureText(text).width > maxW && size > 13) { size -= 0.5; ctx.font = `400 ${size * u}px ${UI_FONT}`; }
+    if (ctx.measureText(text).width > maxW) {
+      while (text.length > 1 && ctx.measureText('…' + text).width > maxW) text = text.slice(1);
+      text = '…' + text;
+    }
+    ctx.fillStyle = ink;
+    ctx.textAlign = 'center';
+    ctx.fillText(text, X(196.5), by + 0.5 * u);
     ctx.restore();
   }
 
@@ -217,8 +376,8 @@
     ctx.save();
     if (state.shadow > 0) {
       ctx.shadowColor = `rgba(0,0,0,${0.15 + state.shadow * 0.35})`;
-      ctx.shadowBlur = g.h * 0.08 * state.shadow;
-      ctx.shadowOffsetY = g.h * 0.03 * state.shadow;
+      ctx.shadowBlur = g.w * 0.165 * state.shadow;
+      ctx.shadowOffsetY = g.w * 0.062 * state.shadow;
     }
     const edge = ctx.createLinearGradient(g.x, 0, g.x + g.w, 0);
     const stops = [0, 0.04, 0.5, 0.96, 1];
@@ -247,8 +406,8 @@
     // Dynamic Island
     if (state.island) {
       const s = g.screen;
-      const iw = s.w * (126 / 393), ih = s.h * (37 / 852);
-      const ix = s.x + (s.w - iw) / 2, iy = s.y + s.h * (11 / 852);
+      const iw = s.w * (126 / 393), ih = s.w * (37 / 393);
+      const ix = s.x + (s.w - iw) / 2, iy = s.y + s.w * (11 / 393);
       ctx.fillStyle = '#000';
       rr(ix, iy, iw, ih, ih / 2);
       ctx.fill();
@@ -503,12 +662,38 @@
   $('bgBlur').addEventListener('input', (e) => { state.bgBlur = +e.target.value; });
   $('bgDim').addEventListener('input', (e) => { state.bgDim = +e.target.value; });
   function syncFit() {
-    $('gapRow').hidden = state.fit !== 'contain';
+    $('gapRow').hidden = state.fit !== 'contain' && !state.safari;
+    $('safariBox').hidden = !state.safari;
     $('gapColor').hidden = state.gapFill !== 'color';
   }
   $('fit').addEventListener('change', (e) => { state.fit = e.target.value; syncFit(); });
   $('gapFill').addEventListener('change', (e) => { state.gapFill = e.target.value; syncFit(); });
   $('gapColor').addEventListener('input', (e) => { state.gapColor = e.target.value; });
+
+  function setHeight(pct) {
+    pct = Math.max(50, Math.min(100, Math.round(pct)));
+    state.heightPct = pct / 100;
+    $('heightPct').value = pct;
+    $('heightVal').textContent = pct + '%';
+  }
+  $('heightPct').addEventListener('input', (e) => setHeight(+e.target.value));
+  $('resetHeight').addEventListener('click', () => setHeight(100));
+  // Size the screen so the recording fills it exactly (plus the Safari bars).
+  $('matchHeight').addEventListener('click', () => {
+    const sw = state.source === 'video' ? video.videoWidth : state.screenImage && state.screenImage.naturalWidth;
+    const sh = state.source === 'video' ? video.videoHeight : state.screenImage && state.screenImage.naturalHeight;
+    if (!sw || !sh) return;
+    const pts = 393 * (sh / sw) + (state.safari ? STATUS_H + TOOLBAR_H : 0);
+    setHeight((pts / 852) * 100);
+    if (pts / 852 < 0.5) setStatus('This recording is wider than the phone can get; gaps will be filled.');
+  });
+
+  $('safari').addEventListener('change', (e) => { state.safari = e.target.checked; syncFit(); });
+  $('uiUrl').addEventListener('input', (e) => { state.uiUrl = e.target.value; });
+  $('uiTime').addEventListener('input', (e) => { state.uiTime = e.target.value; });
+  $('uiNetwork').addEventListener('change', (e) => { state.uiNetwork = e.target.value; });
+  $('uiBattery').addEventListener('input', (e) => { state.uiBattery = +e.target.value; });
+  $('barStyle').addEventListener('change', (e) => { state.barStyle = e.target.value; });
   $('island').addEventListener('change', (e) => { state.island = e.target.checked; });
   $('frameColor').addEventListener('change', (e) => { state.frame = e.target.value; });
   $('phoneSize').addEventListener('input', (e) => { state.size = e.target.value / 100; });
@@ -523,6 +708,7 @@
     $('exportBtn').disabled = !isVideo || state.exporting;
     $('playBtn').disabled = !isVideo;
     $('scrub').disabled = !isVideo;
+    $('matchHeight').disabled = !state.source;
   }
 
   function setStatus(msg) { $('status').textContent = msg; }

@@ -24,7 +24,7 @@ h2 {
 section { padding: 16px 0; border-top: 1px solid #ecebe5; }
 
 .row { display: flex; align-items: center; gap: 10px; margin: 8px 0; }
-.row > label:first-child:not(:only-child) { width: 56px; color: #3a3a3c; flex-shrink: 0; }
+.row > label:first-child:not(:only-child) { width: 62px; color: #3a3a3c; flex-shrink: 0; }
 .row select, .row input[type=range], .row input[type=text] { flex: 1; min-width: 0; }
 select, input[type=text] {
   padding: 6px 8px; border: 1px solid #d6d5cf; border-radius: 8px;
@@ -101,3 +101,5 @@ canvas {
 .notice .progress { margin-top: 8px; }
 .notice .progress div { width: 0; height: 100%; background: #2f3cc9; transition: width .2s; }
 .hint a.dl { color: #2f3cc9; font-weight: 600; }
+.row .val { width: 40px; text-align: right; color: #6e6e73; font-variant-numeric: tabular-nums; }
+.row.btns button { margin-top: 0; }

@@ -91,10 +91,56 @@
         <label>Shadow</label>
         <input type="range" id="shadow" min="0" max="100" value="35" />
       </div>
+      <div class="row">
+        <label>Height</label>
+        <input type="range" id="heightPct" min="50" max="100" value="100" />
+        <span class="val" id="heightVal">100%</span>
+      </div>
+      <div class="row btns">
+        <button id="matchHeight" disabled>Match video</button>
+        <button id="resetHeight">Reset</button>
+      </div>
     </section>
 
     <section>
-      <h2>4 · Export</h2>
+      <h2>4 · Safari UI</h2>
+      <div class="row">
+        <label><input type="checkbox" id="safari" /> Show status bar &amp; Safari toolbar</label>
+      </div>
+      <div id="safariBox" hidden>
+        <div class="row">
+          <label>URL</label>
+          <input type="text" id="uiUrl" value="example.com" spellcheck="false" />
+        </div>
+        <div class="row">
+          <label>Time</label>
+          <input type="text" id="uiTime" value="9:41" spellcheck="false" />
+        </div>
+        <div class="row">
+          <label>Network</label>
+          <select id="uiNetwork">
+            <option value="5G">5G</option>
+            <option value="LTE">LTE</option>
+            <option value="wifi">Wi-Fi</option>
+          </select>
+        </div>
+        <div class="row">
+          <label>Battery</label>
+          <input type="range" id="uiBattery" min="5" max="100" value="100" />
+        </div>
+        <div class="row">
+          <label>Bars</label>
+          <select id="barStyle">
+            <option value="auto">Auto (match video)</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>5 · Export</h2>
       <div class="row">
         <label>Canvas</label>
         <select id="aspect">
