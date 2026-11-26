@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Mockup Vid — phone mockup video creator</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <aside class="panel">
+    <h1>Mockup Vid</h1>
+    <p class="sub">Put a screen recording inside a phone and export a video.</p>
+
+    <section>
+      <h2>1 · Screen recording</h2>
+      <label class="drop" id="videoDrop">
+        <input type="file" id="videoInput" accept="video/*,image/*" hidden />
+        <span id="videoLabel">Drop a video or image here, or <u>browse</u></span>
+      </label>
+      <div class="row">
+        <label>Fit</label>
+        <select id="fit">
+          <option value="cover">Fill screen (crop)</option>
+          <option value="contain">Fit inside screen</option>
+        </select>
+      </div>
+      <div class="row">
+        <label><input type="checkbox" id="island" checked /> Show Dynamic Island</label>
+      </div>
+    </section>
+
+    <section>
+      <h2>2 · Background</h2>
+      <div class="seg" id="bgMode">
+        <button data-mode="color" class="on">Color</button>
+        <button data-mode="image">Image</button>
+      </div>
+      <div id="bgColorBox">
+        <div class="row">
+          <input type="color" id="bgColor" value="#d9d8d3" />
+          <input type="text" id="bgHex" value="#d9d8d3" spellcheck="false" />
+        </div>
+        <div class="swatches" id="swatches"></div>
+      </div>
+      <div id="bgImageBox" hidden>
+        <label class="drop" id="bgDrop">
+          <input type="file" id="bgInput" accept="image/*" hidden />
+          <span id="bgLabel">Drop a background photo, or <u>browse</u></span>
+        </label>
+        <div class="row">
+          <label>Blur</label>
+          <input type="range" id="bgBlur" min="0" max="40" value="0" />
+        </div>
+        <div class="row">
+          <label>Dim</label>
+          <input type="range" id="bgDim" min="0" max="80" value="0" />
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>3 · Phone</h2>
+      <div class="row">
+        <label>Frame</label>
+        <select id="frameColor">
+          <option value="natural">Natural titanium</option>
+          <option value="black">Black</option>
+          <option value="white">White</option>
+          <option value="blue">Blue</option>
+        </select>
+      </div>
+      <div class="row">
+        <label>Size</label>
+        <input type="range" id="phoneSize" min="40" max="100" value="82" />
+      </div>
+      <div class="row">
+        <label>Shadow</label>
+        <input type="range" id="shadow" min="0" max="100" value="35" />
+      </div>
+    </section>
+
+    <section>
+      <h2>4 · Export</h2>
+      <div class="row">
+        <label>Canvas</label>
+        <select id="aspect">
+          <option value="1080x1080">Square 1:1 (1080×1080)</option>
+          <option value="1080x1350">Portrait 4:5 (1080×1350)</option>
+          <option value="1080x1920">Story 9:16 (1080×1920)</option>
+          <option value="1920x1080">Landscape 16:9 (1920×1080)</option>
+          <option value="2160x2160">Square 1:1 4K (2160×2160)</option>
+        </select>
+      </div>
+      <div class="row">
+        <label>Format</label>
+        <select id="format"></select>
+      </div>
+      <div class="row">
+        <label>FPS</label>
+        <select id="fps">
+          <option>30</option>
+          <option selected>60</option>
+        </select>
+      </div>
+      <div class="row">
+        <label><input type="checkbox" id="audio" checked /> Include audio</label>
+      </div>
+      <button class="primary" id="exportBtn" disabled>Export video</button>
+      <button id="pngBtn">Save PNG frame</button>
+      <div class="progress" id="progress" hidden><div id="bar"></div></div>
+      <p class="hint" id="status">Keep this tab visible while exporting. It records in real time.</p>
+    </section>
+  </aside>
+
+  <main class="stage">
+    <canvas id="canvas" width="1080" height="1080"></canvas>
+    <div class="transport">
+      <button id="playBtn" disabled>▶</button>
+      <input type="range" id="scrub" min="0" max="1000" value="0" disabled />
+      <span id="time">0:00 / 0:00</span>
+    </div>
+  </main>
+
+  <video id="video" playsinline muted loop crossorigin="anonymous" hidden></video>
+  <script src="app.js"></script>
+</body>
+</html>
