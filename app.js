@@ -21,6 +21,8 @@
     shadow: 0.35,
     exporting: false,
     screenMsg: null,
+    gapFill: 'edges',
+    gapColor: '#ffffff',
   };
 
   // iPhone-style proportions (screen in points: 393 × 852)
@@ -117,17 +119,79 @@
     btn('right', 0.27, 0.13);   // side button
   }
 
+  // Small offscreen canvas used to sample edge colours and to make a cheap blur
+  // (downscale, then upscale with smoothing) that works in every browser.
+  const sampler = document.createElement('canvas');
+  const sctx = sampler.getContext('2d', { willReadFrequently: true });
+  const edgeColors = {}; // smoothed colours per side, so the fill doesn't flicker
+
+  function avgColor(data, idxs) {
+    let r = 0, g = 0, b = 0;
+    for (const i of idxs) { r += data[i]; g += data[i + 1]; b += data[i + 2]; }
+    const n = idxs.length || 1;
+    return [r / n, g / n, b / n];
+  }
+
+  function sampleEdges(src, sw, sh) {
+    const W = 24, H = Math.max(2, Math.round(24 * sh / sw));
+    sampler.width = W; sampler.height = H;
+    sctx.drawImage(src, 0, 0, W, H);
+    let d;
+    try { d = sctx.getImageData(0, 0, W, H).data; } catch (e) { return null; }
+    const row = (y) => Array.from({ length: W }, (_, x) => (y * W + x) * 4);
+    const col = (x) => Array.from({ length: H }, (_, y) => (y * W + x) * 4);
+    const fresh = { top: avgColor(d, row(0)), bottom: avgColor(d, row(H - 1)),
+                    left: avgColor(d, col(0)), right: avgColor(d, col(W - 1)) };
+    for (const k in fresh) {
+      const prev = edgeColors[k];
+      edgeColors[k] = prev ? prev.map((v, i) => v + (fresh[k][i] - v) * 0.35) : fresh[k];
+    }
+    return edgeColors;
+  }
+  const rgb = (c) => `rgb(${c.map(Math.round).join(',')})`;
+
+  function drawGaps(src, sw, sh, s) {
+    const k = Math.min(s.w / sw, s.h / sh);
+    const dw = sw * k, dh = sh * k;
+    const dx = s.x + (s.w - dw) / 2, dy = s.y + (s.h - dh) / 2;
+    if (state.gapFill === 'black') { ctx.fillStyle = '#000'; ctx.fillRect(s.x, s.y, s.w, s.h); }
+    else if (state.gapFill === 'color') { ctx.fillStyle = state.gapColor; ctx.fillRect(s.x, s.y, s.w, s.h); }
+    else if (state.gapFill === 'blur') {
+      sampler.width = 12; sampler.height = Math.max(2, Math.round(12 * sh / sw));
+      sctx.drawImage(src, 0, 0, sampler.width, sampler.height);
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      drawFitted(sampler, sampler.width, sampler.height, s.x, s.y, s.w, s.h, 'cover');
+    } else {
+      const c = sampleEdges(src, sw, sh);
+      if (!c) { ctx.fillStyle = '#000'; ctx.fillRect(s.x, s.y, s.w, s.h); }
+      else if (dh < s.h - 0.5) {
+        ctx.fillStyle = rgb(c.top);    ctx.fillRect(s.x, s.y, s.w, dy - s.y + 1);
+        ctx.fillStyle = rgb(c.bottom); ctx.fillRect(s.x, dy + dh - 1, s.w, s.y + s.h - (dy + dh) + 1);
+      } else if (dw < s.w - 0.5) {
+        ctx.fillStyle = rgb(c.left);  ctx.fillRect(s.x, s.y, dx - s.x + 1, s.h);
+        ctx.fillStyle = rgb(c.right); ctx.fillRect(dx + dw - 1, s.y, s.x + s.w - (dx + dw) + 1, s.h);
+      }
+    }
+  }
+
   function drawScreenContent(s) {
     ctx.save();
     rr(s.x, s.y, s.w, s.h, s.r);
     ctx.clip();
     ctx.fillStyle = '#000';
     ctx.fillRect(s.x, s.y, s.w, s.h);
-    if (state.source === 'video' && video.videoWidth) {
-      drawFitted(video, video.videoWidth, video.videoHeight, s.x, s.y, s.w, s.h, state.fit);
+    let src = null, sw = 0, sh = 0;
+    if (state.source === 'video' && video.videoWidth && video.readyState >= 2) {
+      src = video; sw = video.videoWidth; sh = video.videoHeight;
     } else if (state.source === 'image' && state.screenImage) {
-      const im = state.screenImage;
-      drawFitted(im, im.naturalWidth, im.naturalHeight, s.x, s.y, s.w, s.h, state.fit);
+      src = state.screenImage; sw = src.naturalWidth; sh = src.naturalHeight;
+    }
+    if (src) {
+      if (state.fit === 'contain') drawGaps(src, sw, sh, s);
+      drawFitted(src, sw, sh, s.x, s.y, s.w, s.h, state.fit);
+    } else if (state.source === 'video' && video.videoWidth) {
+      // video selected but no frame decoded yet: keep the black screen
     } else {
       const grd = ctx.createLinearGradient(s.x, s.y, s.x, s.y + s.h);
       grd.addColorStop(0, '#f2f1ec');
@@ -438,7 +502,13 @@
 
   $('bgBlur').addEventListener('input', (e) => { state.bgBlur = +e.target.value; });
   $('bgDim').addEventListener('input', (e) => { state.bgDim = +e.target.value; });
-  $('fit').addEventListener('change', (e) => { state.fit = e.target.value; });
+  function syncFit() {
+    $('gapRow').hidden = state.fit !== 'contain';
+    $('gapColor').hidden = state.gapFill !== 'color';
+  }
+  $('fit').addEventListener('change', (e) => { state.fit = e.target.value; syncFit(); });
+  $('gapFill').addEventListener('change', (e) => { state.gapFill = e.target.value; syncFit(); });
+  $('gapColor').addEventListener('input', (e) => { state.gapColor = e.target.value; });
   $('island').addEventListener('change', (e) => { state.island = e.target.checked; });
   $('frameColor').addEventListener('change', (e) => { state.frame = e.target.value; });
   $('phoneSize').addEventListener('input', (e) => { state.size = e.target.value / 100; });
