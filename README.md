@@ -18,3 +18,7 @@ python3 -m http.server 8000   # then visit http://localhost:8000
 Export records in real time with `MediaRecorder`, so a 20-second clip takes about 20 seconds. Keep the tab visible while it runs.
 
 Everything runs locally in your browser. Nothing is uploaded.
+
+## Video formats
+
+MP4 (H.264), MOV and WebM play directly. If the browser can't decode a file, for example an HEVC/H.265 `.MOV` from an iPhone in Chrome, the app converts it to H.264 MP4 on your device with [ffmpeg.wasm](https://github.com/ffmpegwasm/ffmpeg.wasm). The wrapper is in `vendor/`. The roughly 32 MB core loads from jsDelivr the first time a conversion is needed.

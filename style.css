@@ -87,3 +87,17 @@ canvas {
   .panel { width: 100%; border-right: 0; }
   canvas { max-height: 70vh; }
 }
+
+#video {
+  position: fixed; left: 0; top: 0; width: 2px; height: 2px;
+  opacity: 0; pointer-events: none;
+}
+.notice {
+  margin-top: 10px; padding: 10px 12px; border-radius: 10px;
+  background: #f4f5ff; color: #1d1d1f; font-size: 13px;
+}
+.notice.error { background: #fff1ef; color: #8a1c0c; }
+.notice p { margin: 0; }
+.notice .progress { margin-top: 8px; }
+.notice .progress div { width: 0; height: 100%; background: #2f3cc9; transition: width .2s; }
+.hint a.dl { color: #2f3cc9; font-weight: 600; }

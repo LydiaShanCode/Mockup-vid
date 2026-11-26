@@ -17,6 +17,10 @@
         <input type="file" id="videoInput" accept="video/*,image/*" hidden />
         <span id="videoLabel">Drop a video or image here, or <u>browse</u></span>
       </label>
+      <div class="notice" id="notice" hidden>
+        <p id="noticeText"></p>
+        <div class="progress" id="convProgress" hidden><div id="convBar"></div></div>
+      </div>
       <div class="row">
         <label>Fit</label>
         <select id="fit">
@@ -121,7 +125,8 @@
     </div>
   </main>
 
-  <video id="video" playsinline muted loop crossorigin="anonymous" hidden></video>
+  <!-- kept in the DOM (not display:none) so iOS Safari decodes frames for the canvas -->
+  <video id="video" playsinline webkit-playsinline muted loop preload="auto"></video>
   <script src="app.js"></script>
 </body>
 </html>

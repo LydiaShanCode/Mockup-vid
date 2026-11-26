@@ -20,6 +20,7 @@
     size: 0.82,
     shadow: 0.35,
     exporting: false,
+    screenMsg: null,
   };
 
   // iPhone-style proportions (screen in points: 393 × 852)
@@ -137,7 +138,7 @@
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.font = `500 ${s.w * 0.055}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
-      ctx.fillText('Drop a screen recording', s.x + s.w / 2, s.y + s.h / 2);
+      ctx.fillText(state.screenMsg || 'Drop a screen recording', s.x + s.w / 2, s.y + s.h / 2);
     }
     ctx.restore();
   }
@@ -239,7 +240,10 @@
       if (shotURL) URL.revokeObjectURL(shotURL);
       shotURL = URL.createObjectURL(file);
       const img = new Image();
+      ++loadToken;
+      setNotice('');
       img.onload = () => {
+        state.screenMsg = null;
         state.screenImage = img;
         state.source = 'image';
         video.pause();
@@ -247,18 +251,128 @@
       };
       img.src = shotURL;
     } else {
-      if (videoURL) URL.revokeObjectURL(videoURL);
-      videoURL = URL.createObjectURL(file);
-      video.src = videoURL;
-      video.onloadeddata = () => {
-        state.source = 'video';
-        video.play().catch(() => {});
-        setControls();
-      };
-      video.onerror = () => setStatus("This browser can't play that video file. Try an MP4 (H.264) or WebM.");
+      tryVideo(file, file.name, true);
     }
     $('videoLabel').textContent = file.name;
     $('videoDrop').classList.add('loaded');
+  }
+
+  // Load a video blob into the <video> element. If the browser can't decode it
+  // (e.g. HEVC .mov from an iPhone in Chrome), convert it to H.264 MP4 in-browser.
+  let loadToken = 0;
+  function tryVideo(blob, name, allowConvert) {
+    const token = ++loadToken;
+    let ready = false, failed = false;
+    state.source = null;
+    state.screenMsg = 'Loading video…';
+    setControls();
+
+    const fail = () => {
+      if (failed || token !== loadToken) return;
+      failed = true;
+      clearTimeout(timer);
+      state.source = null;
+      setControls();
+      if (allowConvert) convertAndLoad(blob, name, token);
+      else {
+        state.screenMsg = "Can't play this video";
+        setNotice("This browser can't play that video, even after conversion. Try exporting it as MP4 (H.264).", 'error');
+      }
+    };
+    const ok = () => {
+      if (ready || failed || token !== loadToken) return;
+      if (!video.videoWidth) return fail(); // audio plays but the video track can't be decoded
+      ready = true;
+      clearTimeout(timer);
+      state.source = 'video';
+      state.screenMsg = null;
+      setControls();
+      if (!allowConvert) setNotice('Converted to MP4. You can export now.');
+      video.play().catch(() => setNotice('Tap ▶ under the preview to start playback.'));
+    };
+
+    if (videoURL) URL.revokeObjectURL(videoURL);
+    videoURL = URL.createObjectURL(blob);
+    video.onloadedmetadata = ok;
+    video.onloadeddata = ok;
+    video.onerror = fail;
+    video.muted = true;
+    video.loop = true;
+    video.src = videoURL;
+    video.load();
+    // Starting playback also makes iOS Safari actually load the file.
+    video.play().catch(() => {});
+    const timer = setTimeout(() => { if (!ready) fail(); }, 10000);
+  }
+
+  // ---------- in-browser conversion (ffmpeg.wasm, loaded on demand) ----------
+  const FFMPEG_CORE = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/esm';
+  let ffPromise = null;
+  function getFFmpeg() {
+    if (!ffPromise) {
+      ffPromise = (async () => {
+        const { FFmpeg } = await import('./vendor/ffmpeg/index.js');
+        const { toBlobURL } = await import('./vendor/util/index.js');
+        const ff = new FFmpeg();
+        ff.on('progress', ({ progress }) => setConvProgress(progress));
+        await ff.load({
+          coreURL: await toBlobURL(`${FFMPEG_CORE}/ffmpeg-core.js`, 'text/javascript'),
+          wasmURL: await toBlobURL(`${FFMPEG_CORE}/ffmpeg-core.wasm`, 'application/wasm'),
+        });
+        return ff;
+      })().catch((err) => { ffPromise = null; throw err; });
+    }
+    return ffPromise;
+  }
+
+  async function convertAndLoad(blob, name, token) {
+    state.screenMsg = 'Converting video…';
+    setNotice("This browser can't play this video format directly (often HEVC from an iPhone). " +
+      'Converting it to MP4 on your device. The first conversion downloads about 32 MB.', 'info', 0);
+    const ext = ((name.match(/\.[a-z0-9]+$/i) || ['.mov'])[0]).toLowerCase();
+    const input = 'input' + ext, output = 'output.mp4';
+    try {
+      const ff = await getFFmpeg();
+      if (token !== loadToken) return;
+      setNotice('Converting video to MP4… keep this tab open.', 'info', 0);
+      await ff.writeFile(input, new Uint8Array(await blob.arrayBuffer()));
+      const code = await ff.exec([
+        '-i', input,
+        '-vf', "scale=-2:'min(ih,1600)'",
+        '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '20', '-pix_fmt', 'yuv420p',
+        '-c:a', 'aac', '-b:a', '160k',
+        '-movflags', '+faststart',
+        output,
+      ]);
+      if (code !== 0) throw new Error('ffmpeg exited with code ' + code);
+      const data = await ff.readFile(output);
+      ff.deleteFile(input).catch(() => {});
+      ff.deleteFile(output).catch(() => {});
+      if (token !== loadToken) return;
+      tryVideo(new Blob([data.buffer], { type: 'video/mp4' }), name, false);
+    } catch (err) {
+      console.error(err);
+      if (token !== loadToken) return;
+      state.screenMsg = "Can't play this video";
+      setNotice("Couldn't convert this video: " + (err && err.message ? err.message : err) +
+        '. Try re-saving it as MP4 (H.264), or open this page in Safari.', 'error');
+    }
+  }
+
+  function setNotice(text, kind = 'info', progress = null) {
+    const n = $('notice');
+    n.hidden = !text;
+    n.classList.toggle('error', kind === 'error');
+    $('noticeText').textContent = text || '';
+    $('convProgress').hidden = progress === null;
+    if (progress !== null) setConvProgress(progress);
+  }
+  function setConvProgress(p) {
+    p = Math.max(0, Math.min(1, p || 0));
+    $('convBar').style.width = `${(p * 100).toFixed(0)}%`;
+    if (state.screenMsg && state.screenMsg.startsWith('Converting')) {
+      state.screenMsg = `Converting video… ${(p * 100).toFixed(0)}%`;
+    }
   }
 
   function loadBg(file) {
@@ -380,11 +494,13 @@
     }
   }
 
-  async function exportVideo() {
+  // Everything up to video.play() runs synchronously inside the click, because
+  // iOS Safari only allows unmuted playback / AudioContext from a user gesture.
+  function exportVideo() {
     if (state.source !== 'video' || !supported.length || state.exporting) return;
     const format = supported[+$('format').value] || supported[0];
     const fps = +$('fps').value;
-    const withAudio = $('audio').checked;
+    let withAudio = $('audio').checked;
 
     state.exporting = true;
     setControls();
@@ -392,58 +508,96 @@
     $('bar').style.width = '0%';
     setStatus('Recording… keep this tab visible.');
 
-    video.pause();
-    video.loop = false;
-    video.currentTime = 0;
-    await new Promise((r) => video.addEventListener('seeked', r, { once: true }));
-
     const stream = canvas.captureStream(fps);
     if (withAudio) {
       const track = getAudioTrack();
-      if (track) stream.addTrack(track);
-      video.muted = false;
+      if (track) stream.addTrack(track); else withAudio = false;
     }
-
     let mime = format.mime;
-    if (!withAudio || !stream.getAudioTracks().length) {
+    if (!withAudio) {
       // drop the audio codec from the mime type when there's no audio track
       mime = format.mimes.find((m) => !/mp4a|opus/.test(m) && MediaRecorder.isTypeSupported(m)) || format.mime;
     }
-    const pixels = canvas.width * canvas.height;
-    const rec = new MediaRecorder(stream, {
-      mimeType: mime,
-      videoBitsPerSecond: Math.round(Math.min(40e6, pixels * fps * 0.12)),
-    });
+
+    let rec;
+    try {
+      const pixels = canvas.width * canvas.height;
+      rec = new MediaRecorder(stream, {
+        mimeType: mime,
+        videoBitsPerSecond: Math.round(Math.min(40e6, pixels * fps * 0.12)),
+      });
+    } catch (err) {
+      return finishExport(null, null, 'Export failed: ' + err.message);
+    }
     const chunks = [];
     rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
-
     const done = new Promise((resolve) => { rec.onstop = resolve; });
-    const tick = setInterval(() => {
-      const p = video.duration ? video.currentTime / video.duration : 0;
-      $('bar').style.width = `${(p * 100).toFixed(1)}%`;
-      $('time').textContent = `${fmt(video.currentTime)} / ${fmt(video.duration)}`;
-    }, 100);
 
-    rec.start(250);
-    video.addEventListener('ended', () => {
-      // a couple of extra frames so the last one is captured
-      setTimeout(() => rec.state !== 'inactive' && rec.stop(), 120);
-    }, { once: true });
-    await video.play();
+    video.pause();
+    video.loop = false;
+    video.muted = !withAudio;
+    video.currentTime = 0;
+    const playing = video.play();
 
-    await done;
-    clearInterval(tick);
-    stream.getVideoTracks().forEach((t) => t.stop());
+    (async () => {
+      try {
+        await playing;
+      } catch (err) {
+        if (!video.muted) {
+          // Unmuted playback blocked: record without audio instead.
+          video.muted = true;
+          withAudio = false;
+          try { await video.play(); } catch (e2) { return abort(e2); }
+        } else return abort(err);
+      }
 
-    const blob = new Blob(chunks, { type: mime.split(';')[0] });
-    download(blob, `mockup-${Date.now()}.${format.ext}`);
+      const tick = setInterval(() => {
+        const p = video.duration ? video.currentTime / video.duration : 0;
+        $('bar').style.width = `${(p * 100).toFixed(1)}%`;
+        $('time').textContent = `${fmt(video.currentTime)} / ${fmt(video.duration)}`;
+      }, 100);
+      const stop = () => setTimeout(() => rec.state !== 'inactive' && rec.stop(), 120);
+      video.addEventListener('ended', stop, { once: true });
+      // Safety net in case 'ended' never fires.
+      const guard = setTimeout(stop, ((video.duration || 600) + 5) * 1000);
+      rec.start(250);
 
+      await done;
+      clearInterval(tick);
+      clearTimeout(guard);
+      const blob = new Blob(chunks, { type: mime.split(';')[0] });
+      const fname = `mockup-${Date.now()}.${format.ext}`;
+      download(blob, fname);
+      finishExport(stream, blob, `Exported ${(blob.size / 1e6).toFixed(1)} MB ${format.ext.toUpperCase()}` +
+        ($('audio').checked && !withAudio ? ' (without audio, because this browser blocked it).' : '.'));
+    })();
+
+    function abort(err) {
+      console.error(err);
+      finishExport(stream, null, 'Export failed: playback was blocked (' + (err && err.message) + '). Tap ▶ once, then try again.');
+    }
+  }
+
+  let lastExportURL = null;
+  function finishExport(stream, blob, msg) {
+    if (stream) stream.getTracks().forEach((t) => t.kind === 'video' && t.stop());
     video.muted = true;
     video.loop = true;
     video.currentTime = 0;
     video.play().catch(() => {});
-    $('bar').style.width = '100%';
-    setStatus(`Exported ${(blob.size / 1e6).toFixed(1)} MB ${format.ext.toUpperCase()}.`);
+    $('bar').style.width = blob ? '100%' : '0%';
+    setStatus(msg);
+    if (blob) {
+      // Fallback for browsers (e.g. iOS Safari) that ignore the automatic download.
+      if (lastExportURL) URL.revokeObjectURL(lastExportURL);
+      lastExportURL = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = lastExportURL;
+      a.download = `mockup-${Date.now()}.${blob.type.includes('mp4') ? 'mp4' : 'webm'}`;
+      a.textContent = 'Download video';
+      a.className = 'dl';
+      $('status').append(' ', a);
+    }
     state.exporting = false;
     setControls();
     setTimeout(() => { $('progress').hidden = true; }, 1500);
