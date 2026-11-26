@@ -26,7 +26,7 @@
     safari: false,
     barStyle: 'auto',
     uiTime: '9:41',
-    uiUrl: 'example.com',
+    uiUrl: 'lydiashan.com',
     uiNetwork: '5G',
     uiBattery: 100,
     gapColor: '#ffffff',
